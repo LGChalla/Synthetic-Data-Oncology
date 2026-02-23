@@ -87,27 +87,30 @@ This work is part of a broader dissertation effort aimed at:
 
 The results contribute to ongoing research on constraint-based LLM engineering for clinical applications.
 
-
 ## Repository Structure
 Synthetic-Data-Oncology/
 │
 ├── New multi input-tuned prompts.py
-│   → Prompt engineering experiments with multi-factor structured inputs (This was the initial set-up to understand prompt engineering)
+│   → Initial prompt engineering framework exploring multi-factor structured inputs.
+│     Designed to study how prompt components influence structured oncology outputs.
 │
 ├── Prompt+factors for camel and llama new.py
-│   → Comparative experiments across ClinicalCamel and LLaMA models (Within this, the two csv. files need to be used to understand the influence of a variety of combination of parameters)
+│   → Comparative experiments across ClinicalCamel and LLaMA models.
+│     Uses Full_Factorial_Combinations.csv and One-Factor-at-a-Time_Experiment.csv
+│     to evaluate parameter sensitivity and model behavior under different prompt configurations.
 │
 ├── longitudinal synthetic Data.py
-│   → Synthetic longitudinal oncology note generation and evaluation
+│   → Synthetic longitudinal oncology note generation and temporal consistency evaluation.
 │
 ├── optimized bioportal post processing.py
-│   → Ontology-aligned post-processing and concept verification (BioPortal integration)
+│   → Ontology-aligned post-processing and concept verification using BioPortal.
+│     Supports terminology consistency and structured validation.
 │
 ├── Full_Factorial_Combinations.csv
-│   → Full-factorial experimental design outputs
+│   → Results from full-factorial experimental design exploring prompt parameter combinations.
 │
 ├── One-Factor-at-a-Time_Experiment.csv
-│   → Controlled ablation study results
+│   → Controlled ablation study evaluating the isolated impact of individual prompt factors.
 │
 └── README.md
 
