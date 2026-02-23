@@ -88,6 +88,8 @@ This work is part of a broader dissertation effort aimed at:
 The results contribute to ongoing research on constraint-based LLM engineering for clinical applications.
 
 ## Repository Structure
+
+```text
 Synthetic-Data-Oncology/
 │
 ├── New multi input-tuned prompts.py
@@ -113,7 +115,7 @@ Synthetic-Data-Oncology/
 │   → Controlled ablation study evaluating the isolated impact of individual prompt factors.
 │
 └── README.md
-
+```
 ## Future Directions
 
 - Integration with ontology APIs (e.g., SNOMED CT)
