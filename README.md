@@ -2,8 +2,6 @@
 
 A research-driven framework for generating, validating, and evaluating synthetic clinical oncology data using structured prompting and constraint-based verification.
 
----
-
 ## Overview
 
 This repository contains experiments and pipelines developed as part of ongoing doctoral research focused on improving reliability and interpretability in AI-generated clinical data.
@@ -12,7 +10,6 @@ The project explores how large language models (LLMs) can be used to generate st
 
 The core objective is to move from creative text generation to **verifiable, constraint-based engineering** for clinical data synthesis.
 
----
 
 ## Research Motivation
 
@@ -36,7 +33,6 @@ The broader research goal is to support reliable synthetic data generation for:
 - Evaluation of clinical NLP systems
 - Early-stage oncology modeling
 
----
 
 ## Project Components
 
@@ -60,7 +56,6 @@ The broader research goal is to support reliable synthetic data generation for:
 - Ontology coverage
 - Hallucination detection signals
 
----
 
 ## Technologies Used
 
@@ -71,7 +66,6 @@ The broader research goal is to support reliable synthetic data generation for:
 - NumPy / Pandas
 - Matplotlib (for evaluation visualization)
 
----
 
 ## Example Workflow
 
@@ -81,7 +75,6 @@ The broader research goal is to support reliable synthetic data generation for:
 4. Score completeness and coverage
 5. Log evaluation metrics for comparison
 
----
 
 ## Research Context
 
@@ -94,7 +87,33 @@ This work is part of a broader dissertation effort aimed at:
 
 The results contribute to ongoing research on constraint-based LLM engineering for clinical applications.
 
----
 
 ## Repository Structure
+Synthetic-Data-Oncology/
+│
+├── prompts/ # Structured prompt templates
+├── schema/ # JSON schema definitions
+├── evaluation/ # Scoring and validation scripts
+├── experiments/ # Generation outputs and comparisons
+├── notebooks/ # Analysis and visualization
+└── README.md
 
+
+## Future Directions
+
+- Integration with ontology APIs (e.g., SNOMED CT)
+- Comparative benchmarking across model families
+- Expansion to multimodal oncology data
+- Automated hallucination taxonomy integration
+
+
+## Disclaimer
+
+This repository is for research and experimental purposes only.  
+Generated content is synthetic and not intended for clinical decision-making.
+
+## Author
+
+Laxmigayathri Challa  
+PhD Student – Information Science (Data Science Concentration)  
+University of North Texas
