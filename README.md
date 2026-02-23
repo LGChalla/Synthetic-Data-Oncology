@@ -91,13 +91,25 @@ The results contribute to ongoing research on constraint-based LLM engineering f
 ## Repository Structure
 Synthetic-Data-Oncology/
 │
-├── prompts/ # Structured prompt templates
-├── schema/ # JSON schema definitions
-├── evaluation/ # Scoring and validation scripts
-├── experiments/ # Generation outputs and comparisons
-├── notebooks/ # Analysis and visualization
+├── New multi input-tuned prompts.py
+│   → Prompt engineering experiments with multi-factor structured inputs (This was the initial set-up to understand prompt engineering)
+│
+├── Prompt+factors for camel and llama new.py
+│   → Comparative experiments across ClinicalCamel and LLaMA models (Within this, the two csv. files need to be used to understand the influence of a variety of combination of parameters)
+│
+├── longitudinal synthetic Data.py
+│   → Synthetic longitudinal oncology note generation and evaluation
+│
+├── optimized bioportal post processing.py
+│   → Ontology-aligned post-processing and concept verification (BioPortal integration)
+│
+├── Full_Factorial_Combinations.csv
+│   → Full-factorial experimental design outputs
+│
+├── One-Factor-at-a-Time_Experiment.csv
+│   → Controlled ablation study results
+│
 └── README.md
-
 
 ## Future Directions
 
