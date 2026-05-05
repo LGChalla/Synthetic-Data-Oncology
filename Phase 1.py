@@ -1,12 +1,6 @@
 # Phase1_fixed.py
 # DATAGEN Phase 1 — Synthetic Data Generation
 #
-# ── USAGE ─────────────────────────────────────────────────────────────────────
-#   Set GPU before running:
-#       CUDA_VISIBLE_DEVICES=0 python Phase1_fixed.py        # GPU 0 only
-#       CUDA_VISIBLE_DEVICES=1 python Phase1_fixed.py        # GPU 1 only
-#       CUDA_VISIBLE_DEVICES=0,1 python Phase1_fixed.py      # both GPUs
-#
 #   This script creates results/ and results/master_results.jsonl automatically.
 #   Re-running APPENDS to master_results.jsonl (safe for multi-run experiments).
 #   To start fresh: delete results/master_results.jsonl before running.
@@ -30,10 +24,7 @@
 #   a randomly sampled T/N/M target, giving open-source models a stronger
 #   signal to produce diverse outputs.
 #
-# FIX 4 [LOADER] Two-attempt 4-bit loader for 48GB-per-GPU hardware:
-#   Attempt 1 — single GPU (cuda:0). Fast path, works when one GPU has ~35GB free.
-#   Attempt 2 — all visible GPUs via device_map="auto" + max_memory cap.
-#               Fallback when single-GPU OOMs (e.g. ClinicalCamel on 48GB cards).
+# FIX 4 [LOADER] Two-attempt 4-bit loader for GPU Optimization strategy analysis
 # ──────────────────────────────────────────────────────────────────────────────
 
 import os
