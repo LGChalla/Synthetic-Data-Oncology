@@ -1,7 +1,7 @@
 # Synthetic Data Generation and Quality Assurance for Lung Cancer Staging Using LLMs
 
 Laxmigayathri Challa · PhD Student, Information Science (Data Science)  
-University of North Texas · [Paper (IEEE BIBM 2026)](https://github.com/LGChalla/Synthetic-Data-Oncology)
+University of North Texas ·
 
 ---
 
