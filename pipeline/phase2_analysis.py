@@ -33,14 +33,19 @@ DIVERSITY_ENTROPY_FLOOR = {"T": 1.11, "N": 1.11, "M": 0.55}
 
 def load_data(filepath):
     if not os.path.exists(filepath):
-        print(f"Error: {filepath} not found.")
+        print(f"[ERROR] {filepath} not found. Run phase1_datagen.py first.")
         return pd.DataFrame()
-    data = []
+    data, skipped = [], 0
     with open(filepath, "r", encoding="utf-8") as f:
-        for line in f:
+        for i, line in enumerate(f, 1):
             if line.strip():
-                try:   data.append(json.loads(line))
-                except: continue
+                try:
+                    data.append(json.loads(line))
+                except json.JSONDecodeError as e:
+                    skipped += 1
+                    print(f"[WARN] Skipping malformed JSON on line {i}: {e}")
+    if skipped:
+        print(f"[WARN] {skipped} record(s) skipped due to parse errors.")
     return pd.DataFrame(data)
 
 
@@ -280,6 +285,9 @@ def analyze_snomed_coverage(df):
 
 
 def main():
+    if not os.path.exists(RESULTS_FILE):
+        print(f"[ERROR] {RESULTS_FILE} not found. Run pipeline/phase1_datagen.py first.")
+        return
     os.makedirs(EXPORT_DIR, exist_ok=True)
     df = load_data(RESULTS_FILE)
     if df.empty:

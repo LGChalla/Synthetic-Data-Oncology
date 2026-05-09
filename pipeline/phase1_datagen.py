@@ -44,7 +44,7 @@ from scipy.stats import entropy as shannon_entropy
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:512"
 
-_HF_CACHE = os.getenv("HF_HOME", "/mnt/storage/home/lc0611@students.ad.unt.edu/hf_cache")
+_HF_CACHE = os.getenv("HF_HOME", os.path.join(os.path.expanduser("~"), ".cache", "huggingface"))
 os.environ["HF_HOME"]               = _HF_CACHE
 os.environ["HUGGINGFACE_HUB_CACHE"] = _HF_CACHE
 
@@ -60,8 +60,9 @@ from transformers import (
 from huggingface_hub import login
 
 # ── OUTPUT PATHS ──────────────────────────────────────────────────────────────
-RESULTS_DIR  = "results"
-RESULTS_FILE = os.path.join(RESULTS_DIR, "master_results.jsonl")
+RESULTS_DIR       = "results"
+RESULTS_FILE      = os.path.join(RESULTS_DIR, "master_results.jsonl")
+CHECKPOINT_FILE   = os.path.join(RESULTS_DIR, "completed_runs.txt")
 
 # ── GPU SANITY CHECK ──────────────────────────────────────────────────────────
 print("=" * 60)
@@ -193,6 +194,20 @@ SYSTEM_PROMPT_EXPLORATORY = (
     "You may use free text and standard clinical narrative. "
     "No need to strictly follow a schema."
 )
+
+
+# ── CHECKPOINTING ─────────────────────────────────────────────────────────────
+def load_completed_run_ids() -> set:
+    if not os.path.exists(CHECKPOINT_FILE):
+        return set()
+    with open(CHECKPOINT_FILE, "r", encoding="utf-8") as f:
+        return {line.strip() for line in f if line.strip()}
+
+
+def mark_run_completed(run_key: str):
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    with open(CHECKPOINT_FILE, "a", encoding="utf-8") as f:
+        f.write(run_key + "\n")
 
 
 # ── RESULT LOGGING ────────────────────────────────────────────────────────────
@@ -422,11 +437,13 @@ def generate_structured(
             print(f"  [HF Gen Error] {e}")
         finally:
             # Free tensors immediately to prevent VRAM fragmentation
-            for _v in ["input_ids", "attn_mask", "out_ids", "inputs"]:
-                if _v in dir():
-                    try: exec(f"del {_v}")
-                    except Exception: pass
+            for _name in ("inputs", "input_ids", "attn_mask", "out_ids"):
+                try:
+                    del locals()[_name]
+                except KeyError:
+                    pass
             if torch.cuda.is_available():
+                torch.cuda.synchronize()
                 torch.cuda.empty_cache()
 
     # ── Post-processing ───────────────────────────────────────────────────────
@@ -465,10 +482,17 @@ def generate_structured(
 
 
 # ── LAYER RUNNERS ─────────────────────────────────────────────────────────────
-def run_exploratory(model_id: str, hf_artifacts, num_runs: int = 5):
+def run_exploratory(model_id: str, hf_artifacts, num_runs: int = 5,
+                    completed: set = None):
     """FIX 3: Each run requests a randomly sampled T/N/M target."""
+    if completed is None:
+        completed = set()
     print(f"\n--- Layer 1: Exploratory ({model_id}, {num_runs} runs) ---")
     for i in range(num_runs):
+        run_key = f"{model_id}::exploratory::{i}"
+        if run_key in completed:
+            print(f"  [SKIP] Run {i+1}/{num_runs} already completed.")
+            continue
         t = random.choice(T_VALUES)
         n = random.choice(N_VALUES)
         m = random.choice(M_VALUES)
@@ -485,10 +509,14 @@ def run_exploratory(model_id: str, hf_artifacts, num_runs: int = 5):
             {"seed": 42 + i},
             "exploratory", "unrestricted",
         )
+        mark_run_completed(run_key)
 
 
-def run_controlled(model_id: str, hf_artifacts, csv_path: str):
+def run_controlled(model_id: str, hf_artifacts, csv_path: str,
+                   completed: set = None):
     """FIX 1: Each ablation row gets a different TNM cell via round-robin."""
+    if completed is None:
+        completed = set()
     print(f"\n--- Layer 2: Controlled ({model_id}) — {csv_path} ---")
     if not os.path.exists(csv_path):
         print(f"  [SKIP] {csv_path} not found.")
@@ -498,6 +526,10 @@ def run_controlled(model_id: str, hf_artifacts, csv_path: str):
     print(f"  Loaded {len(df)} ablation rows from {csv_path}")
 
     for idx, row in df.iterrows():
+        run_key = f"{model_id}::controlled::{os.path.basename(csv_path)}::{idx}"
+        if run_key in completed:
+            print(f"  [SKIP] Row {idx+1} already completed.")
+            continue
         t, n, m   = TNM_GRID[idx % len(TNM_GRID)]
         base_case = build_controlled_case(t, n, m)
         prompt    = (
@@ -532,10 +564,14 @@ def run_controlled(model_id: str, hf_artifacts, csv_path: str):
             model_id, hf_artifacts, prompt, params,
             "controlled", "zero-shot-anchored",
         )
+        mark_run_completed(run_key)
 
 
-def run_longitudinal(model_id: str, hf_artifacts, num_runs: int = 5):
+def run_longitudinal(model_id: str, hf_artifacts, num_runs: int = 5,
+                     completed: set = None):
     """Generates multi-encounter patient timelines with AJCC-compliant progression."""
+    if completed is None:
+        completed = set()
     print(f"\n--- Layer 3: Longitudinal ({model_id}, {num_runs} runs) ---")
     prompt = (
         f"SCHEMA:\n{json.dumps(TIMELINE_SCHEMA, indent=2)}\n\n"
@@ -547,12 +583,17 @@ def run_longitudinal(model_id: str, hf_artifacts, num_runs: int = 5):
         "Ensure TNM values and stage_group are internally consistent at every visit."
     )
     for i in range(num_runs):
+        run_key = f"{model_id}::longitudinal::{i}"
+        if run_key in completed:
+            print(f"  [SKIP] Run {i+1}/{num_runs} already completed.")
+            continue
         print(f"  Run {i+1}/{num_runs}")
         generate_structured(
             model_id, hf_artifacts, prompt,
             {"temperature": 0.4, "do_sample": True, "seed": 100 + i},
             "longitudinal", "timeline-3-visits",
         )
+        mark_run_completed(run_key)
 
 
 # ── DIVERSITY AUDIT (FIX 2) ───────────────────────────────────────────────────
@@ -741,6 +782,12 @@ def main():
         "wanglab/ClinicalCamel-70B",
     ]
 
+    # ── Startup validation ────────────────────────────────────────────────────
+    for csv_path in ["data/one_factor_at_a_time.csv", "data/full_factorial.csv"]:
+        if not os.path.exists(csv_path):
+            print(f"[WARN] Ablation CSV not found: {csv_path}  "
+                  f"— controlled layer will be skipped for this file.")
+
     os.makedirs(RESULTS_DIR, exist_ok=True)
     if os.path.exists(RESULTS_FILE):
         with open(RESULTS_FILE, "r") as f:
@@ -748,6 +795,10 @@ def main():
         print(f"Appending to existing {RESULTS_FILE} ({existing} records already logged).")
     else:
         print(f"Creating {RESULTS_FILE} — new run.")
+
+    completed = load_completed_run_ids()
+    if completed:
+        print(f"Checkpoint loaded: {len(completed)} run(s) already done — will skip these.")
 
     for model_id in MODELS:
         print(f"\n{'='*60}\nMODEL: {model_id}\n{'='*60}")
@@ -766,10 +817,10 @@ def main():
                 hf_artifacts     = load_hf_model(model_id)
                 model, tokenizer = hf_artifacts
 
-            run_exploratory(model_id, hf_artifacts, num_runs=5)
-            run_controlled(model_id,  hf_artifacts, "One-Factor-at-a-Time_Experiment.csv")
-            run_controlled(model_id,  hf_artifacts, "Full_Factorial_Combinations.csv")
-            run_longitudinal(model_id, hf_artifacts, num_runs=5)
+            run_exploratory(model_id, hf_artifacts, num_runs=5, completed=completed)
+            run_controlled(model_id,  hf_artifacts, "data/one_factor_at_a_time.csv", completed=completed)
+            run_controlled(model_id,  hf_artifacts, "data/full_factorial.csv",        completed=completed)
+            run_longitudinal(model_id, hf_artifacts, num_runs=5, completed=completed)
             print(f"\n>> Finished {model_id} successfully.")
 
         except Exception as e:

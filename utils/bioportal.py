@@ -1,112 +1,103 @@
-import os, re, json, uuid, csv, torch, requests, gc
-import pandas as pd
-from datetime import datetime
-from typing import List, Dict, Tuple
-from huggingface_hub import login
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+"""
+utils/bioportal.py
+BioPortal SNOMED CT annotation utility.
 
-# =========================
-# 1. ENHANCED CONFIGURATION
-# =========================
-MODEL_NAME = "meta-llama/Meta-Llama-3-70B-Instruct"
-BIOPORTAL_API_KEY = os.getenv("BIOPORTAL_API_KEY") 
-HF_TOKEN = os.getenv("HF_TOKEN")
+Standalone helper used by phase1_datagen.py and the ablation scripts.
+Set BIOPORTAL_API_KEY in your environment before use.
+"""
 
-if not HF_TOKEN or not BIOPORTAL_API_KEY:
-    print("CRITICAL: Ensure HF_TOKEN and BIOPORTAL_API_KEY are set in your environment.")
+import os
+import re
+import requests
+from typing import List, Dict
 
-login(HF_TOKEN)
-session_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-OUTPUT_LOG = f"postprocessed_results_{session_time}.txt"
+BIOPORTAL_API_KEY = os.getenv("BIOPORTAL_API_KEY", "")
+_BASE_URL = "https://data.bioontology.org/annotator"
+_LUNG_CANCER_PATTERN = re.compile(
+    r"\b(lung|pulmon|bronch|adenocarcinoma|squamous|neoplasm|staging|carcinoma|metastasis)\b",
+    re.IGNORECASE,
+)
 
-# =========================
-# 2. THE NEURO-SYMBOLIC GUARDRAIL (BioPortal)
-# =========================
-def annotate_bioportal_snomed(text: str) -> List[Dict]:
-    """Calls BioPortal Annotator with a lung-cancer specific focus."""
-    url = "https://data.bioontology.org/annotator"
-    params = {
-        "text": text,
-        "ontologies": "SNOMEDCT",
-        "longest_only": "true",
-        "whole_word_only": "true",
-        "apikey": BIOPORTAL_API_KEY,
-    }
-    try:
-        # Retry logic for BioPortal API stability
-        for _ in range(3):
-            r = requests.get(url, params=params, timeout=15)
-            if r.status_code == 200:
-                break
-        r.raise_for_status()
-        data = r.json()
-        
-        results = []
-        for ann in data:
-            clz = ann.get("annotatedClass", {})
-            results.append({
-                "snomed_id": clz.get("@id", "").rsplit("/", 1)[-1],
-                "prefLabel": clz.get("prefLabel", ""),
-                "matched_text": ann.get("annotations", [{}])[0].get("text", "")
-            })
-        return results
-    except Exception as e:
-        print(f"BioPortal Error: {e}")
+
+def annotate_snomed(text: str, filter_lung_cancer: bool = False) -> List[Dict]:
+    """
+    Calls BioPortal Annotator and returns SNOMED CT concept matches.
+
+    Args:
+        text: Clinical text to annotate.
+        filter_lung_cancer: If True, only returns concepts whose prefLabel
+                            matches lung-cancer-relevant keywords.
+
+    Returns:
+        List of dicts with keys: snomed_id, prefLabel, matched_text.
+    """
+    if not BIOPORTAL_API_KEY:
+        print("[BioPortal] BIOPORTAL_API_KEY not set — returning empty.")
+        return []
+    if not text or not text.strip():
         return []
 
-def apply_guardrails(note_text: str) -> str:
-    """Injects SNOMED codes directly into the text (Neuro-Symbolic Layer)."""
-    annotations = annotate_bioportal_snomed(note_text)
+    params = {
+        "text":            text,
+        "ontologies":      "SNOMEDCT",
+        "longest_only":    "true",
+        "whole_word_only": "true",
+        "exclude_numbers": "true",
+    }
+    headers = {"Authorization": f"apikey token={BIOPORTAL_API_KEY}"}
+
+    try:
+        for attempt in range(3):
+            r = requests.get(_BASE_URL, params=params, headers=headers, timeout=15)
+            if r.status_code == 200:
+                break
+            if attempt == 2:
+                r.raise_for_status()
+
+        results: List[Dict] = []
+        seen = set()
+        for ann in r.json():
+            clz        = ann.get("annotatedClass", {})
+            pref_label = clz.get("prefLabel", "Unknown")
+            iri        = clz.get("@id", "")
+            snomed_id  = iri.rsplit("/", 1)[-1] if iri else ""
+            matched    = ann.get("annotations", [{}])[0].get("text", "")
+            key        = f"{snomed_id}_{matched}"
+            if key in seen:
+                continue
+            seen.add(key)
+            if filter_lung_cancer and not _LUNG_CANCER_PATTERN.search(pref_label):
+                continue
+            results.append({
+                "snomed_id":    snomed_id,
+                "prefLabel":    pref_label,
+                "matched_text": matched,
+            })
+        return results
+
+    except requests.RequestException as e:
+        print(f"[BioPortal] Request error: {e}")
+        return []
+    except (KeyError, ValueError) as e:
+        print(f"[BioPortal] Parse error: {e}")
+        return []
+
+
+def inject_ontology_block(note_text: str) -> str:
+    """
+    Annotates note_text with SNOMED CT codes and appends a grounding block.
+    Used by the neuro-symbolic post-processing layer.
+    """
+    annotations = annotate_snomed(note_text, filter_lung_cancer=True)
     if not annotations:
         return note_text
-    
-    # Filter for Lung-Cancer relevancy to avoid noise
-    relevant_keywords = r"\b(lung|pulmon|bronch|adenocarcinoma|squamous|neoplasm|staging)\b"
-    filtered = [a for a in annotations if re.search(relevant_keywords, a['prefLabel'], re.I)]
-    
-    # Simple Block Injection for the final note
-    code_block = "\n\n[Ontology Grounding]\n" + "\n".join([f"- {a['prefLabel']}: {a['snomed_id']}" for a in filtered])
-    return note_text + code_block
+    block = "\n\n[Ontology Grounding]\n" + "\n".join(
+        f"- {a['prefLabel']}: {a['snomed_id']}" for a in annotations
+    )
+    return note_text + block
 
-# =========================
-# 3. GENERATION ENGINE
-# =========================
-# [Keep your existing Model Loading and Prompt Functions here]
-# ... (Use your BitsAndBytesConfig and AutoModelForCausalLM setup) ...
 
-def run_guarded_experiment(prompt_mode, params):
-    """Generates the note and then applies the BioPortal safety layer."""
-    # 1. Generate Raw Output
-    raw_output = generate(prompt_mode, **params) # Using your previous generate() function
-    
-    # 2. Apply Post-Processing (The "Safety Layer")
-    guarded_output = apply_guardrails(raw_output)
-    
-    # 3. Log to file
-    with open(OUTPUT_LOG, "a") as f:
-        f.write(f"\n--- RUN: {prompt_mode} ---\n{guarded_output}\n")
-    
-    return guarded_output
-
-# =========================
-# 4. EXECUTION LOOP
-# =========================
-if __name__ == "__main__":
-    # Load your experiment CSVs
-    combo_df = pd.read_csv("Full_Factorial_Combinations.csv")
-    
-    for _, row in combo_df.head(5).iterrows(): # Testing with first 5 for speed
-        exp_params = {
-            "max_length": int(row["max_length"]),
-            "temperature": float(row["temperature"]),
-            "top_p": float(row["top_p"]),
-            "top_k": int(row["top_k"]),
-            "do_sample": True
-        }
-        
-        print(f"Running Guarded Generation for Temp: {exp_params['temperature']}")
-        run_guarded_experiment("Few-Shot", exp_params)
-
-    # Cleanup memory
-    torch.cuda.empty_cache()
-    gc.collect()
+def snomed_density(text: str, annotations: List[Dict]) -> float:
+    """Returns length-normalised SNOMED term count (terms per 100 words)."""
+    word_count = max(len(text.split()), 1)
+    return (len(annotations) / word_count) * 100

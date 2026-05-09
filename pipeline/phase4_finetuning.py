@@ -16,6 +16,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 
 import os
+import json
 os.environ["CUDA_DEVICE_ORDER"]    = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:512"
@@ -118,7 +119,7 @@ def prepare_dataset(csv_path, tokenizer):
             "If a value is not found, use 'Unknown'.\n\n"
             f"NOTE: {text}"
         )
-        completion = f'{{"T": "{t}", "N": "{n}", "M": "{m}"}}'
+        completion = json.dumps({"T": t, "N": n, "M": m})
         full_text  = (
             f"<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n"
             f"{prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
@@ -189,23 +190,36 @@ def main():
     tier1_csv = "data_splits/train_tier1_raw.csv"
     tier3_csv = "data_splits/train_tier3_golden.csv"
 
+    # ── Startup validation ────────────────────────────────────────────────────
+    missing = [p for p in (tier1_csv, tier3_csv) if not os.path.exists(p)]
+    if missing:
+        print(f"[ERROR] Missing input file(s): {missing}")
+        print("        Run pipeline/phase3_benchmark.py first to produce data_splits/.")
+        return
+
+    os.makedirs("adapters/tier1_raw",    exist_ok=True)
+    os.makedirs("adapters/tier3_golden", exist_ok=True)
+
     print("Initializing tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Adapter A — Tier 1 Raw
+    # Adapter A — Tier 1 Raw (UNKNOWN labels by design; diversity check is informational only)
     dataset_tier1 = prepare_dataset(tier1_csv, tokenizer)
     if dataset_tier1:
         train_qlora_adapter(dataset_tier1, "adapters/tier1_raw",    "Tier 1 (Raw)",    tokenizer)
 
-    # Adapter B — Tier 3 Golden
+    # Adapter B — Tier 3 Golden (must pass diversity gate before training proceeds)
+    import pandas as _pd
+    _df3 = _pd.read_csv(tier3_csv)
+    check_label_diversity(_df3, tier3_csv, abort_on_fail=True)
     dataset_tier3 = prepare_dataset(tier3_csv, tokenizer)
     if dataset_tier3:
         train_qlora_adapter(dataset_tier3, "adapters/tier3_golden", "Tier 3 (Golden)", tokenizer)
 
     print("\nAll adapters trained.")
-    print("Next: run Phase3_fixed.py to benchmark.")
+    print("Next: run pipeline/phase3_benchmark.py to benchmark.")
 
 
 if __name__ == "__main__":
