@@ -1,15 +1,10 @@
 # Synthetic Data for Lung Cancer Staging
 
-<<<<<<< HEAD
 *What happens when the data you need to build a clinical AI system is exactly the data you can't have?*
 
 Lung cancer kills more people than any other cancer. Survival swings from 80% at Stage I to under 20% at Stage IV — and three in four patients are diagnosed at the late stages. The models that could change that need structured, annotated clinical notes. Those notes are locked behind privacy law, annotation bottlenecks, and institutional walls that take years to navigate.
 
 This project builds the data instead. Not as a shortcut — as a principled engineering commitment.
-=======
-Laxmigayathri Challa · PhD Student, Information Science (Data Science)  
-University of North Texas ·
->>>>>>> 71fad0844d495e7716320350ab80091ab8d90418
 
 ---
 
@@ -73,10 +68,6 @@ data/               Ablation design CSVs (128-cell full factorial · 11-point OF
 
 ---
 
-<<<<<<< HEAD
 *Laxmigayathri Challa · PhD, Information Science (Data Science) · University of North Texas*  
 *Paper: IEEE BIBM 2026*  
-*Generated data is synthetic and not for clinical use.*
-=======
 *All generated data is synthetic and not intended for clinical use, YET.*
->>>>>>> 71fad0844d495e7716320350ab80091ab8d90418
