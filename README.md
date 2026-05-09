@@ -84,4 +84,4 @@ Scaling the golden corpus to ≥500 certified records per TNM cell would provide
 
 ---
 
-*All generated data is synthetic and not intended for clinical use.*
+*All generated data is synthetic and not intended for clinical use, YET.*
