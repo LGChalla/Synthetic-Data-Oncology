@@ -1,4 +1,4 @@
-# Synthetic Data for Lung Cancer Staging
+# Synthetic Data for Lung Cancer Staging — Full Pipeline with Ablation Studies
 
 *What happens when the data you need to build a clinical AI system is exactly the data you can't have?*
 
@@ -6,9 +6,11 @@ Lung cancer kills more people than any other cancer. Survival swings from 80% at
 
 This project builds the data instead. Not as a shortcut — as a principled engineering commitment.
 
+This repository contains the complete pipeline: the original four-phase generation and evaluation framework, plus the full ablation study infrastructure that isolates exactly which parts of the pipeline do the work.
+
 ---
 
-## The Pipeline
+## The Original Pipeline
 
 Four phases. Each one gates the next.
 
@@ -44,18 +46,87 @@ On 283 multi-cancer notes: +41.0 pp on T3, +54.5 pp on T4.
 
 ---
 
+## The Ablation Studies
+
+Three independent studies, each running the full pipeline under controlled conditions:
+
+| Study | Question | Adapters |
+|-------|----------|---------|
+| Gate vs No-Gate | Does the validation gate actually improve corpus quality? | A (ungated) vs D (full gate) |
+| Gate Decomposition | Which gate component does the most work? | B (schema) vs C (schema+ontology) vs D (full G(x)) |
+| RAG vs No-RAG | Does MedCPT retrieval enrich the corpus meaningfully? | D (no RAG) vs E (RAG) |
+
+Each study runs through Phase 1 (generation), Phase 2 (audit), and Phase 4 (training) independently — then Phase 3 evaluates all adapters together on MTSamples.
+
+---
+
 ## Repository
 
 ```
-pipeline/           Four-phase pipeline (datagen → analysis → benchmark → finetune)
-preprocessing/      MTSamples extraction and real-world TSTR setup
-experiments/        Ablations: Gate vs No-Gate · Gate Decomposition · RAG vs No-RAG
-                    Prompt engineering · Model comparison · Longitudinal generation
-utils/              BioPortal SNOMED CT annotation
-data/               Ablation design CSVs (128-cell full factorial · 11-point OFAT)
+pipeline/               Original Phase 1–4 (reference implementation)
+  phase1_datagen.py
+  phase2_analysis.py
+  phase3_benchmark.py
+  phase4_finetuning.py
+
+ablation_phases/        Ablation-aware Phase 1–4 (condition-parameterized)
+  phase1_generate.py    accepts --condition ungated/schema_only/schema_onto/full_norag/full_rag
+  phase2_audit.py       cross-condition quality comparison
+  phase3_benchmark.py   all five adapters on MTSamples
+  phase4_finetune.py    trains one adapter per condition
+
+ablations/              Three independent ablation studies
+  1_gate_vs_nogate/
+    run_ungated.py      generates + trains Adapter A
+    run_gated.py        generates + trains Adapter D
+    compare.py          side-by-side quality table + per-model breakdown
+  2_gate_decomposition/
+    run_schema_only.py  generates + trains Adapter B (C1)
+    run_schema_onto.py  generates + trains Adapter C (C2)
+    run_full_gate.py    generates + trains Adapter D (C3)
+    compare.py          sequential gate decomposition table
+  3_rag_vs_norag/
+    run_norag.py        generates + trains Adapter D
+    run_rag.py          generates + trains Adapter E (MedCPT RAG)
+    compare.py          SNOMED density comparison + Mann-Whitney U
+
+core/                   Shared utilities
+  gate.py               G(x) gate components (schema, ontology, logic)
+  generation.py         Model loading and generation (4-bit NF4, GPT-4o)
+  schemas.py            rigid.v3 and longitudinal.v1 schema definitions
+  tnm_grid.py           32-cell TNM grid, diversity audit, entropy gates
+  bioportal.py          SNOMED CT annotation
+  medcpt.py             MedCPT RAG retrieval over FAISS PubMed index
+  logging_utils.py      JSONL logging and checkpointing
+
+preprocessing/          MTSamples extraction and real-world TSTR setup
+experiments/            Prompt engineering · Model comparison · Longitudinal generation
+utils/                  BioPortal post-processing
+data/                   Ablation design CSVs (128-cell full factorial · 11-point OFAT)
+config.py               All paths, model IDs, and hyperparameters
 ```
 
-**Run order:** `phase1_datagen.py` → `phase2_analysis.py` → `mtsamples_prep.py` → `phase3_benchmark.py` → `phase4_finetuning.py`
+---
+
+## Running the Ablation Studies
+
+Each ablation study runs independently. Run all three models per condition for meaningful gate rejection rates.
+
+```bash
+# Ablation 1 — Gate vs No-Gate
+python ablations/1_gate_vs_nogate/run_ungated.py --model meta-llama/Llama-3.3-70B-Instruct --runs 128
+python ablations/1_gate_vs_nogate/run_ungated.py --model wanglab/ClinicalCamel-70B          --runs 128
+python ablations/1_gate_vs_nogate/run_ungated.py --model gpt-4o                             --runs 128
+
+python ablations/1_gate_vs_nogate/run_gated.py   --model meta-llama/Llama-3.3-70B-Instruct --runs 128
+python ablations/1_gate_vs_nogate/run_gated.py   --model wanglab/ClinicalCamel-70B          --runs 128
+python ablations/1_gate_vs_nogate/run_gated.py   --model gpt-4o                             --runs 128
+
+python ablations/1_gate_vs_nogate/compare.py
+
+# Ablation 2 — Gate Decomposition (same pattern, three conditions)
+# Ablation 3 — RAG vs No-RAG (add --faiss-index for MedCPT)
+```
 
 ---
 
@@ -68,5 +139,6 @@ data/               Ablation design CSVs (128-cell full factorial · 11-point OF
 
 ---
 
-*Laxmigayathri Challa · PhD, Information Science (Data Science) · University of North Texas*  
+*Laxmigayathri Challa · PhD, Information Science (Data Science) · University of North Texas*
+*Paper: IEEE BIBM 2026*
 *All generated data is synthetic and not intended for clinical use, YET.*
