@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""
+preprocessing/tcga_prep.py
+==========================
+Builds the real-world TSTR test sets from TCGA pathology reports.
+
+WHY THIS REPLACES mtsamples_prep.py
+-----------------------------------
+MTSamples had no structured stage labels, so the old pipeline tried to
+*extract* T/N/M from free text with regex. That regex matched non-staging
+tokens ("at 2 liters" -> T2, spine vertebrae "T2-L2" -> T2, MRI sequences),
+so most "ground-truth" labels were noise.
+
+TCGA is different: the T/N/M labels already exist in TCGA's clinical
+metadata, assigned by pathologists from the actual tumor slides. We do NOT
+extract labels from the text. We JOIN the report text to the official label
+by patient ID. No regex touches the label -> no contamination.
+
+SOURCES (public, MIT-licensed)
+  report text : github.com/tatonetti-lab/tcga-path-reports  (TCGA_Reports.csv.zip)
+  TNM labels  : github.com/tatonetti-lab/tnm-stage-classifier (TCGA_Metadata/*.csv)
+
+OUTPUTS (written to data_splits/)
+  tcga_lung_gold.csv         lung only  (TCGA-LUAD + TCGA-LUSC)
+  tcga_crosstumor_gold.csv   all non-lung cancer types
+
+Each row has BOTH naming conventions so either benchmark works unchanged:
+  free_text, T_target/N_target/M_target  (StageCraft realworld_benchmark.py)
+            , T_label /N_label /M_label   (ablation phases/phase3_benchmark.py)
+  plus cancer_type, project_id for stratification.
+
+Usage:
+  python preprocessing/tcga_prep.py
+  python preprocessing/tcga_prep.py --keep-noncore   # keep T0/TX/Tis rows too
+"""
+
+import argparse
+import io
+import os
+import re
+import sys
+import urllib.request
+import zipfile
+
+import pandas as pd
+
+# ---------------------------------------------------------------------------
+# Locations
+# ---------------------------------------------------------------------------
+RAW = "https://raw.githubusercontent.com"
+REPORTS_ZIP_URL = f"{RAW}/tatonetti-lab/tcga-path-reports/main/TCGA_Reports.csv.zip"
+LABEL_URLS = {
+    "T": f"{RAW}/tatonetti-lab/tnm-stage-classifier/main/TCGA_Metadata/TCGA_T14_patients.csv",
+    "N": f"{RAW}/tatonetti-lab/tnm-stage-classifier/main/TCGA_Metadata/TCGA_N03_patients.csv",
+    "M": f"{RAW}/tatonetti-lab/tnm-stage-classifier/main/TCGA_Metadata/TCGA_M01_patients.csv",
+}
+LABEL_COL = {
+    "T": "ajcc_pathologic_t",
+    "N": "ajcc_pathologic_n",
+    "M": "ajcc_pathologic_m",
+}
+
+CACHE_DIR = "data_splits/_tcga_cache"
+OUT_DIR = "data_splits"
+LUNG_PROJECTS = {"TCGA-LUAD", "TCGA-LUSC"}  # adeno + squamous lung carcinoma
+
+
+# ---------------------------------------------------------------------------
+# Download helpers (cached so you only fetch once)
+# ---------------------------------------------------------------------------
+def _fetch(url: str, dest: str) -> str:
+    if os.path.exists(dest):
+        return dest
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    print(f"  downloading {os.path.basename(dest)} ...")
+    urllib.request.urlretrieve(url, dest)
+    return dest
+
+
+def load_reports() -> pd.DataFrame:
+    zip_path = _fetch(REPORTS_ZIP_URL, f"{CACHE_DIR}/TCGA_Reports.csv.zip")
+    with zipfile.ZipFile(zip_path) as z:
+        name = [n for n in z.namelist() if n.endswith(".csv")][0]
+        with z.open(name) as fh:
+            r = pd.read_csv(io.BytesIO(fh.read()))
+    # patient_filename looks like "TCGA-BP-5195.<uuid>"; the part before the
+    # dot is the 12-char patient barcode (case_submitter_id) we join on.
+    r["case_submitter_id"] = r["patient_filename"].str.split(".").str[0]
+    return r[["case_submitter_id", "text"]]
+
+
+def load_labels() -> pd.DataFrame:
+    frames = {}
+    for stage, url in LABEL_URLS.items():
+        path = _fetch(url, f"{CACHE_DIR}/labels_{stage}.csv")
+        d = pd.read_csv(path)
+        frames[stage] = d[["case_submitter_id", "project_id", LABEL_COL[stage]]]
+    lab = frames["T"]
+    for stage in ("N", "M"):
+        lab = lab.merge(
+            frames[stage][["case_submitter_id", LABEL_COL[stage]]],
+            on="case_submitter_id",
+            how="left",
+        )
+    return lab
+
+
+# ---------------------------------------------------------------------------
+# Label normalisation: strip subdivision suffixes to the main category.
+#   T1a/T1b/T1c -> T1 ; T2a -> T2 ; etc.  T0/TX/Tis kept as-is (dropped later
+#   unless --keep-noncore) because the generator only emits T1-T4 / N0-N3 / M0-M1.
+# ---------------------------------------------------------------------------
+def normalise(value, prefix: str):
+    if not isinstance(value, str):
+        return None
+    m = re.match(prefix + r"(is|X|[0-4])", value, re.IGNORECASE)
+    return prefix + m.group(1).upper() if m else None
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--keep-noncore", action="store_true",
+                    help="Keep T0/TX/Tis rows (default: keep only T1-T4).")
+    args = ap.parse_args()
+
+    os.makedirs(OUT_DIR, exist_ok=True)
+    print("Loading TCGA pathology reports + official TNM labels ...")
+    reports = load_reports()
+    labels = load_labels()
+
+    # JOIN text <-> labels on patient barcode; one report per patient.
+    df = reports.merge(labels, on="case_submitter_id", how="inner")
+    df = df.drop_duplicates("case_submitter_id").reset_index(drop=True)
+
+    df["free_text"] = df["text"]
+    df["T_target"] = df[LABEL_COL["T"]].apply(lambda v: normalise(v, "T"))
+    df["N_target"] = df[LABEL_COL["N"]].apply(lambda v: normalise(v, "N"))
+    df["M_target"] = df[LABEL_COL["M"]].apply(lambda v: normalise(v, "M"))
+    # mirror columns for the ablation-repo benchmark, which reads *_label
+    df["T_label"], df["N_label"], df["M_label"] = df["T_target"], df["N_target"], df["M_target"]
+    df["cancer_type"] = df["project_id"].str.replace("TCGA-", "", regex=False)
+
+    core = {"T1", "T2", "T3", "T4"}
+    if not args.keep_noncore:
+        df = df[df["T_target"].isin(core)].copy()
+
+    cols = ["free_text", "T_target", "N_target", "M_target",
+            "T_label", "N_label", "M_label", "cancer_type", "project_id"]
+
+    lung = df[df["project_id"].isin(LUNG_PROJECTS)][cols]
+    cross = df[~df["project_id"].isin(LUNG_PROJECTS)][cols]
+
+    lung_path = f"{OUT_DIR}/tcga_lung_gold.csv"
+    cross_path = f"{OUT_DIR}/tcga_crosstumor_gold.csv"
+    lung.to_csv(lung_path, index=False)
+    cross.to_csv(cross_path, index=False)
+
+    def report(name, sub, path):
+        vc = sub["T_target"].value_counts().to_dict()
+        ceil = round(max(vc.values()) / len(sub), 3) if len(sub) else 0
+        print(f"\n  {name}: n={len(sub)}  ->  {path}")
+        print(f"    T classes: {vc}")
+        print(f"    constant-classifier ceiling: {ceil}")
+
+    print("\n" + "=" * 60)
+    report("LUNG (LUAD+LUSC)", lung, lung_path)
+    report("CROSS-TUMOR (all non-lung)", cross, cross_path)
+    print("\nDone. Labels are TCGA pathologist-assigned (not extracted).")
+
+
+if __name__ == "__main__":
+    main()
