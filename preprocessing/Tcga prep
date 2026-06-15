@@ -140,10 +140,12 @@ def main():
     df["T_label"], df["N_label"], df["M_label"] = df["T_target"], df["N_target"], df["M_target"]
     df["cancer_type"] = df["project_id"].str.replace("TCGA-", "", regex=False)
 
-    core = {"T1", "T2", "T3", "T4"}
     if not args.keep_noncore:
-        df = df[df["T_target"].isin(core)].copy()
-
+    df = df[
+        df["T_target"].isin({"T1", "T2", "T3", "T4"})
+        & df["N_target"].isin({"N0", "N1", "N2", "N3"})
+        & df["M_target"].isin({"M0", "M1"})
+    ].copy()
     cols = ["free_text", "T_target", "N_target", "M_target",
             "T_label", "N_label", "M_label", "cancer_type", "project_id"]
 
@@ -155,13 +157,26 @@ def main():
     lung.to_csv(lung_path, index=False)
     cross.to_csv(cross_path, index=False)
 
-    def report(name, sub, path):
-        vc = sub["T_target"].value_counts().to_dict()
-        ceil = round(max(vc.values()) / len(sub), 3) if len(sub) else 0
-        print(f"\n  {name}: n={len(sub)}  ->  {path}")
-        print(f"    T classes: {vc}")
-        print(f"    constant-classifier ceiling: {ceil}")
+def report(name, sub, path):
 
+    t_vc = sub["T_target"].value_counts().to_dict()
+    n_vc = sub["N_target"].value_counts().to_dict()
+    m_vc = sub["M_target"].value_counts().to_dict()
+
+    t_ceil = round(max(t_vc.values()) / len(sub), 3) if len(sub) else 0
+    n_ceil = round(max(n_vc.values()) / len(sub), 3) if len(sub) else 0
+    m_ceil = round(max(m_vc.values()) / len(sub), 3) if len(sub) else 0
+
+    print(f"\n{name}: n={len(sub)} -> {path}")
+
+    print(f"  T classes: {t_vc}")
+    print(f"  T constant-classifier ceiling: {t_ceil}")
+
+    print(f"  N classes: {n_vc}")
+    print(f"  N constant-classifier ceiling: {n_ceil}")
+
+    print(f"  M classes: {m_vc}")
+    print(f"  M constant-classifier ceiling: {m_ceil}")
     print("\n" + "=" * 60)
     report("LUNG (LUAD+LUSC)", lung, lung_path)
     report("CROSS-TUMOR (all non-lung)", cross, cross_path)
