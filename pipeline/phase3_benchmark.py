@@ -423,8 +423,14 @@ def run_extraction_benchmark(
         try:
             encoded   = tokenizer.apply_chat_template(
                 messages, return_tensors="pt", add_generation_prompt=True)
-            input_ids = encoded["input_ids"].to("cuda")
-            attn_mask = torch.ones_like(input_ids)
+            # FIX: apply_chat_template may return BatchEncoding or tensor
+            if hasattr(encoded, "input_ids"):
+                input_ids = encoded.input_ids.to("cuda")
+            elif isinstance(encoded, dict):
+                input_ids = encoded["input_ids"].to("cuda")
+            else:
+                input_ids = encoded.to("cuda")
+            attn_mask = torch.ones(input_ids.shape, dtype=torch.long, device=input_ids.device)
             with torch.no_grad():
                 out_ids = model.generate(
                     input_ids=input_ids, attention_mask=attn_mask,
