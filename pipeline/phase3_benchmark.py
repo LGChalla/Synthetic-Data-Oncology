@@ -423,14 +423,8 @@ def run_extraction_benchmark(
         try:
             encoded   = tokenizer.apply_chat_template(
                 messages, return_tensors="pt", add_generation_prompt=True)
-            # FIX: apply_chat_template may return BatchEncoding or tensor
-            if hasattr(encoded, "input_ids"):
-                input_ids = encoded.input_ids.to("cuda")
-            elif isinstance(encoded, dict):
-                input_ids = encoded["input_ids"].to("cuda")
-            else:
-                input_ids = encoded.to("cuda")
-            attn_mask = torch.ones(input_ids.shape, dtype=torch.long, device=input_ids.device)
+            input_ids = encoded["input_ids"].to("cuda")
+            attn_mask = torch.ones_like(input_ids)
             with torch.no_grad():
                 out_ids = model.generate(
                     input_ids=input_ids, attention_mask=attn_mask,
@@ -563,8 +557,13 @@ def main():
 
     os.makedirs(EXPORT_DIR, exist_ok=True)
 
-    adapter_path = "adapters/tier3_golden/final_adapter"
-    has_adapter  = os.path.exists(adapter_path)
+    # All three adapters for the three-way ablation
+    adapters = [
+        ("adapters/tier1_raw/final_adapter",      "Adapter A"),
+        ("adapters/tier3_scrambled/final_adapter", "Adapter A-prime"),
+        ("adapters/tier3_golden/final_adapter",   "Adapter B"),
+    ]
+    adapters = [(p, n) for p, n in adapters if os.path.exists(p)]
 
     # Synthetic held-out (always runs)
     df = load_clean_data(RESULTS_FILE)
@@ -575,10 +574,10 @@ def main():
             run_extraction_benchmark(
                 test_csv, dataset_name="Synthetic Held-Out BASELINE",
                 is_real_world=False)
-            if has_adapter:
+            for adapter_path, adapter_name in adapters:
                 run_extraction_benchmark(
                     test_csv, eval_model_id=adapter_path,
-                    dataset_name="Synthetic Held-Out ADAPTER",
+                    dataset_name=f"Synthetic Held-Out {adapter_name}",
                     is_real_world=False)
 
     # Real-world benchmark
@@ -589,11 +588,11 @@ def main():
         run_extraction_benchmark(
             args.real_data_file,
             dataset_name=f"{args.dataset_label} BASELINE",
-            is_real_world=True)       # FIX 2: activates GT filter
-        if has_adapter:
+            is_real_world=True)
+        for adapter_path, adapter_name in adapters:
             run_extraction_benchmark(
                 args.real_data_file, eval_model_id=adapter_path,
-                dataset_name=f"{args.dataset_label} ADAPTER",
+                dataset_name=f"{args.dataset_label} {adapter_name}",
                 is_real_world=True)
 
 
