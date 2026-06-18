@@ -1,24 +1,19 @@
-# Phase2_fixed.py
+# pipeline/phase2_analysis.py
 # DATAGEN Phase 2 — Statistical Quality Analysis
 #
 # ── CHANGELOG ─────────────────────────────────────────────────────────────────
-# FIX 1 [CRITICAL] Label uniformity auditing:
-#   Original analyzed stage_group distribution only in the exploratory layer.
-#   Controlled-layer records were never audited for label diversity, so the
-#   T2/N0/M0 collapse went undetected. Now analyze_label_diversity() runs on
-#   the controlled + longitudinal ("Golden") corpus and reports per-dimension
-#   Shannon entropy, Chi-Square GOF, and a PASS/FAIL gate.
-#
-# FIX 2 [IMPORTANT] Per-class TNM breakdown in exploratory analysis:
-#   Added breakdown by T, N, M individually (not just stage_group) to surface
-#   dimension-level collapses that aggregate stage-group counts can hide.
-#
-# FIX 3 [MINOR] Export for downstream graph generation:
-#   All key tables now export to CSV so the graph script can load them directly
-#   without re-running the full analysis.
+# FIX 1 [CRITICAL] Label uniformity auditing (analyze_label_diversity).
+# FIX 2 [IMPORTANT] Per-class TNM breakdown in exploratory analysis.
+# FIX 3 [MINOR] CSV export for downstream graph generation.
+# FIX 4 [CRITICAL] Robust TNM normalization — identical to Phase 3 / Phase 4.
+#   Without this, raw labels like 'T3', bare '3', 'T2a', 'pT1' are counted as
+#   SEPARATE classes, fragmenting the distribution and inflating entropy
+#   (e.g. T-entropy 1.99 across 10 phantom classes instead of 1.31 across 4).
+#   normalize_tnm_label() collapses them to the canonical T1-T4 / N0-N3 / M0-M1
+#   space before any diversity statistic is computed.
 # ──────────────────────────────────────────────────────────────────────────────
-
 import os
+import re
 import json
 import pandas as pd
 import numpy as np
@@ -27,8 +22,24 @@ from scipy.stats import entropy, chisquare, chi2_contingency
 RESULTS_FILE = "results/master_results.jsonl"
 EXPORT_DIR   = "results/analysis_exports"
 
-# ── Minimum acceptable entropy per TNM dimension (80% of theoretical max) ────
 DIVERSITY_ENTROPY_FLOOR = {"T": 1.11, "N": 1.11, "M": 0.55}
+
+
+def normalize_tnm_label(value: str, prefix: str) -> str:
+    """
+    FIX 4: Robust TNM normalization — identical to Phase 3 / Phase 4.
+      pT1 -> T1, cN2 -> N2, T2a -> T2, bare 3 -> T3, blank -> <PREFIX>UNKNOWN.
+    """
+    v = str(value).strip().upper()
+    if v in ("", "NONE", "NULL", "NAN", "UNKNOWN"):
+        return prefix.upper() + "UNKNOWN"
+    v = re.sub(r"^[PC]", "", v)
+    if v.startswith(prefix.upper()):
+        v = v[len(prefix):]
+    m = re.match(r"(IS|X|[0-4])", v)
+    if not m:
+        return prefix.upper() + "UNKNOWN"
+    return prefix.upper() + m.group(1)
 
 
 def load_data(filepath):
@@ -50,7 +61,7 @@ def load_data(filepath):
 
 
 def flatten_controlled_data(df):
-    """Extract T/N/M labels from controlled + longitudinal valid records."""
+    """Extract normalized T/N/M labels from controlled + longitudinal valid records."""
     records = []
     for _, row in df[df["layer"].isin(["controlled", "longitudinal"])].iterrows():
         if not row.get("parsed_json_valid") or not isinstance(row.get("parsed_json"), dict):
@@ -63,9 +74,9 @@ def flatten_controlled_data(df):
         records.append({
             "model": row.get("model", "Unknown"),
             "layer": row.get("layer", "Unknown"),
-            "T":     str(stg.get("T", "Unknown")).upper(),
-            "N":     str(stg.get("N", "Unknown")).upper(),
-            "M":     str(stg.get("M", "Unknown")).upper(),
+            "T":     normalize_tnm_label(stg.get("T", "Unknown"), "T"),
+            "N":     normalize_tnm_label(stg.get("N", "Unknown"), "N"),
+            "M":     normalize_tnm_label(stg.get("M", "Unknown"), "M"),
             "stage_group": str(stg.get("stage_group", "Unknown")).upper(),
         })
     return pd.DataFrame(records)
@@ -86,9 +97,9 @@ def flatten_exploratory_data(df):
         records.append({
             "model":       row.get("model", "Unknown"),
             "stage_group": str(stg.get("stage_group", "Unknown")).upper(),
-            "T":           str(stg.get("T", "Unknown")).upper(),
-            "N":           str(stg.get("N", "Unknown")).upper(),
-            "M":           str(stg.get("M", "Unknown")).upper(),
+            "T":           normalize_tnm_label(stg.get("T", "Unknown"), "T"),
+            "N":           normalize_tnm_label(stg.get("N", "Unknown"), "N"),
+            "M":           normalize_tnm_label(stg.get("M", "Unknown"), "M"),
             "histology":   str(hist.get("name", "Unknown")),
             "sex":         str(demo.get("sex", "Unknown")),
         })
@@ -123,34 +134,25 @@ def analyze_json_validity(df):
 
 
 def analyze_exploratory(df):
-    """
-    FIX 2: Reports per-dimension T/N/M entropy in addition to stage_group.
-    """
     print("\n" + "="*60)
     print("LAYER 1: EXPLORATORY — STAGING BIAS (stage_group + T/N/M)")
     print("="*60)
     flat_df = flatten_exploratory_data(df)
     if flat_df.empty:
         print("No exploratory data found."); return
-
     stats_records = []
     for model in flat_df["model"].unique():
         print(f"\n--- Model: {model} ---")
         mdf = flat_df[flat_df["model"] == model]
-
-        # Stage group
         sg_counts = mdf["stage_group"].value_counts()
         expected  = np.array([sg_counts.sum() / len(sg_counts)] * len(sg_counts))
         stat, p   = chisquare(f_obs=sg_counts.values, f_exp=expected)
         sg_ent    = calculate_diversity_score(mdf["stage_group"])
         print(f"  stage_group entropy: {sg_ent:.3f} | χ² p={p:.4f} "
               f"{'(*Bias*)' if p < 0.05 else '(No Bias)'}")
-
-        # Per-dimension breakdown (FIX 2)
         for dim in ("T", "N", "M"):
             ent = calculate_diversity_score(mdf[dim])
             print(f"  {dim} entropy: {ent:.3f} | dist: {mdf[dim].value_counts().to_dict()}")
-
         stats_records.append({
             "model": model,
             "stage_group_entropy": round(sg_ent, 3),
@@ -159,30 +161,22 @@ def analyze_exploratory(df):
             "N_entropy":           round(calculate_diversity_score(mdf["N"]), 3),
             "M_entropy":           round(calculate_diversity_score(mdf["M"]), 3),
         })
-
     out = pd.DataFrame(stats_records)
     out.to_csv(f"{EXPORT_DIR}/table_2_exploratory_bias.csv", index=False)
     print(f"\nExported → table_2_exploratory_bias.csv")
 
 
 def analyze_label_diversity(df):
-    """
-    FIX 1 [CRITICAL]: Audits the controlled+longitudinal Golden corpus for
-    per-dimension label diversity. This is the check that was MISSING in the
-    original pipeline and allowed the T2/N0/M0 collapse to go undetected.
-    """
     print("\n" + "="*60)
     print("GOLDEN CORPUS DIVERSITY AUDIT (Controlled + Longitudinal)")
     print("="*60)
     flat_df = flatten_controlled_data(df)
     if flat_df.empty:
         print("No golden records found — run Phase 1 first."); return
-
     audit_records = []
     for model in flat_df["model"].unique():
         print(f"\n--- Model: {model} (n={len(flat_df[flat_df['model']==model])}) ---")
         mdf = flat_df[flat_df["model"] == model]
-
         model_row = {"model": model}
         for dim in ("T", "N", "M", "stage_group"):
             counts  = mdf[dim].value_counts()
@@ -194,12 +188,10 @@ def analyze_label_diversity(df):
             model_row[f"{dim}_entropy"] = round(ent, 3)
             model_row[f"{dim}_status"]  = status
         audit_records.append(model_row)
-
     out = pd.DataFrame(audit_records)
     out.to_csv(f"{EXPORT_DIR}/table_label_diversity_audit.csv", index=False)
     print(f"\nExported → table_label_diversity_audit.csv")
 
-    # Overall corpus (all models combined)
     print("\n--- Overall Corpus (all models) ---")
     for dim in ("T", "N", "M"):
         counts = flat_df[dim].value_counts()
@@ -215,21 +207,18 @@ def analyze_controlled(df):
     print("="*60)
     ctrl_df = df[df["layer"] == "controlled"].copy()
     if ctrl_df.empty: return
-
     ctrl_df["temperature"] = ctrl_df["params"].apply(
         lambda x: x.get("temperature", "N/A") if isinstance(x, dict) else "N/A")
     ctrl_df["chat_tpl"]    = ctrl_df["params"].apply(
         lambda x: x.get("use_chat_template", True) if isinstance(x, dict) else True)
     ctrl_df["strict_json"] = ctrl_df["params"].apply(
         lambda x: x.get("strict_json", True) if isinstance(x, dict) else True)
-
     summary = ctrl_df.groupby(["model", "temperature", "chat_tpl", "strict_json"])[
         "parsed_json_valid"
     ].agg(Total_Runs="count", Valid_Count="sum")
     summary["Compliance_Rate (%)"] = (summary["Valid_Count"] / summary["Total_Runs"] * 100).round(1)
     print(summary.to_string())
     summary.to_csv(f"{EXPORT_DIR}/table_3_controlled_descriptive.csv")
-
     print("\n--- Strict JSON Stopper Effect Size ---")
     effect_records = []
     for model in ctrl_df["model"].unique():
@@ -250,7 +239,6 @@ def analyze_longitudinal(df):
     print("="*60)
     long_df = df[df["layer"] == "longitudinal"]
     if long_df.empty: return
-
     records = []
     for model in long_df["model"].unique():
         mdf         = long_df[long_df["model"] == model]
@@ -262,7 +250,6 @@ def analyze_longitudinal(df):
         print(f"  {model}: {total} timelines | {n_errors} errors ({error_rate:.1f}%)")
         records.append({"model": model, "total_timelines": total,
                         "errors": n_errors, "error_rate": round(error_rate, 1)})
-
     pd.DataFrame(records).to_csv(f"{EXPORT_DIR}/table_4_longitudinal_errors.csv", index=False)
 
 
@@ -270,11 +257,10 @@ def analyze_snomed_coverage(df):
     print("\n" + "="*60)
     print("ONTOLOGY: LENGTH-NORMALIZED SNOMED DENSITY")
     print("="*60)
-    df["snomed_count"]       = df["snomed_codes"].apply(lambda x: len(x) if isinstance(x, list) else 0)
-    df["word_count"]         = df["raw_output"].apply(lambda x: len(str(x).split()) if pd.notnull(x) else 1)
-    df["word_count"]         = df["word_count"].replace(0, 1)
-    df["snomed_per_100w"]    = (df["snomed_count"] / df["word_count"]) * 100
-
+    df["snomed_count"]    = df["snomed_codes"].apply(lambda x: len(x) if isinstance(x, list) else 0)
+    df["word_count"]      = df["raw_output"].apply(lambda x: len(str(x).split()) if pd.notnull(x) else 1)
+    df["word_count"]      = df["word_count"].replace(0, 1)
+    df["snomed_per_100w"] = (df["snomed_count"] / df["word_count"]) * 100
     summary = df.groupby(["model", "layer"]).agg(
         Avg_Raw_Terms  =("snomed_count",    "mean"),
         Avg_Word_Count =("word_count",      "mean"),
@@ -282,6 +268,15 @@ def analyze_snomed_coverage(df):
     ).round(2)
     print(summary.to_string())
     summary.to_csv(f"{EXPORT_DIR}/table_5_snomed_normalized.csv")
+
+    # RAG vs non-RAG SNOMED density (uses rag_used flag from the real corpus)
+    if "rag_used" in df.columns:
+        print("\n--- SNOMED density by RAG condition ---")
+        # include zero-word/zero-density failed generations as density 0
+        rag_summary = df.groupby("rag_used")["snomed_per_100w"].agg(
+            mean="mean", median="median", n="count").round(3)
+        print(rag_summary.to_string())
+        rag_summary.to_csv(f"{EXPORT_DIR}/table_5b_snomed_by_rag.csv")
 
 
 def main():
@@ -293,14 +288,12 @@ def main():
     if df.empty:
         print("No data found. Run Phase 1 first.")
         return
-
     analyze_json_validity(df)
     analyze_exploratory(df)
-    analyze_label_diversity(df)   # FIX 1: NEW — was completely missing
+    analyze_label_diversity(df)
     analyze_controlled(df)
     analyze_longitudinal(df)
     analyze_snomed_coverage(df)
-
     print(f"\nAnalysis complete. Exports in ./{EXPORT_DIR}/")
 
 
