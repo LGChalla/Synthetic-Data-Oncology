@@ -236,9 +236,15 @@ def load_clean_data(filepath):
             notes    = row["parsed_json"].get("notes", [])
             if not notes or not isinstance(notes, list): continue
             note     = notes[0]
-            free_text = note.get("free_text", "").strip()
-            if not free_text: continue
-            stg = note.get("staging", {})
+            free_text_raw = note.get("free_text")
+            if free_text_raw is None:
+                continue
+            free_text = str(free_text_raw).strip()
+            if not free_text:
+                continue
+            if not free_text: 
+                continue
+            stg = note.get("staging") or {}
             records.append({
                 "run_id":            row.get("run_id"),
                 "layer":             row.get("layer"),
@@ -364,11 +370,13 @@ def run_extraction_benchmark(
                 print(f"  ⚠️  NOTE: {dim} is single-class — "
                       f"accuracy measures label reproduction, not discrimination.")
 
+    
+    
     all_rows = subsets["all"]
     if len(all_rows) == 0:
         print("No valid records to benchmark."); return
     if len(all_rows) > 100:
-        all_rows = all_rows.sample(100, random_state=42).reset_index(drop=True)
+        all_rows = all_rows.sample(100, random_state=42)
         print("Sampling 100 records for inference...")
 
     # Also re-filter subsets to match the sampled indices
