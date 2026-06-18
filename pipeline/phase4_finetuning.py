@@ -2,30 +2,16 @@
 # DATAGEN Phase 4 — QLoRA Fine-Tuning
 #
 # ── CHANGELOG ─────────────────────────────────────────────────────────────────
-# FIX 1 [CRITICAL] Pre-training label diversity check:
-#   Original silently trained on whatever CSV was handed to it. If the training
-#   CSV is label-uniform (e.g. all T2/N0/M0), the adapter will learn a degenerate
-#   prior. Now check_label_diversity() runs BEFORE training and raises a clear
-#   warning (with option to abort) if any TNM dimension is single-class.
-#
-# FIX 2 [MINOR] Training set stats logged at startup:
-#   Prints label distribution so the researcher can see diversity at a glance
-#   without re-running Phase 2.
-#
-# FIX 3 [CRITICAL] Adapter A' (label-scrambled control) added:
-#   The paper's three-way ablation requires Adapter A, Adapter A', and Adapter B.
-#   Adapter A' is trained on the same 162 Golden records as Adapter B, but with
-#   TNM label triples randomly permuted (derangement, seed=42). Because permutation
-#   preserves the multiset of label values, H_T/H_N/H_M are exactly identical
-#   between Adapter A' and Adapter B. What scrambling destroys is solely the
-#   semantic correspondence between each note's content and its staging label.
-#   prepare_scrambled_dataset() implements this derangement and verifies entropy
-#   is preserved before training begins.
-#
-# All other logic (QLoRA config, optimizer, adapter saving) is unchanged.
+# FIX 1 [CRITICAL] Pre-training label diversity check (check_label_diversity).
+# FIX 2 [MINOR] Training set stats logged at startup.
+# FIX 3 [CRITICAL] Adapter A' (label-scrambled control) via seed-42 derangement.
+# FIX 4 [CRITICAL] Robust TNM normalization — handles pT1/cN2/T2a/bare-number
+#   label forms in the real corpus. Strips leading p/c, drops a/b/c subdivisions,
+#   prefixes bare numbers, blanks -> UNKNOWN. Must match Phase 3 exactly so the
+#   scrambled derangement and entropy checks operate on clean 4-class labels.
 # ──────────────────────────────────────────────────────────────────────────────
-
 import os
+import re
 import json
 import random
 import numpy as np
@@ -51,7 +37,6 @@ from scipy.stats import entropy as shannon_entropy
 
 MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
 
-# Minimum entropy thresholds (same as Phase 1 and 2)
 DIVERSITY_ENTROPY_FLOOR = {"T": 1.11, "N": 1.11, "M": 0.55}
 
 
@@ -64,19 +49,23 @@ def set_seed(seed: int = 42):
 
 
 def normalize_tnm_label(value: str, prefix: str) -> str:
+    """
+    FIX 4: Robust TNM normalization — identical to Phase 3.
+      pT1 -> T1, cN2 -> N2, T2a -> T2, bare 3 -> T3, blank -> <PREFIX>UNKNOWN.
+    """
     v = str(value).strip().upper()
-    if not v.startswith(prefix.upper()):
-        v = prefix.upper() + v
-    return v
+    if v in ("", "NONE", "NULL", "NAN", "UNKNOWN"):
+        return prefix.upper() + "UNKNOWN"
+    v = re.sub(r"^[PC]", "", v)
+    if v.startswith(prefix.upper()):
+        v = v[len(prefix):]
+    m = re.match(r"(IS|X|[0-4])", v)
+    if not m:
+        return prefix.upper() + "UNKNOWN"
+    return prefix.upper() + m.group(1)
 
 
 def check_label_diversity(df: pd.DataFrame, csv_path: str, abort_on_fail: bool = False) -> bool:
-    """
-    FIX 1: Audits T/N/M label distributions before training begins.
-    Prints PASS/FAIL per dimension. If abort_on_fail=True and any dimension
-    fails, raises RuntimeError to stop training on a degenerate corpus.
-    Returns True if all dimensions pass, False otherwise.
-    """
     print("\n" + "="*60)
     print(f"PRE-TRAINING DIVERSITY AUDIT: {csv_path}")
     print("="*60)
@@ -113,10 +102,6 @@ def check_label_diversity(df: pd.DataFrame, csv_path: str, abort_on_fail: bool =
 
 
 def _make_derangement(n: int, seed: int = 42) -> list:
-    """
-    Returns a derangement of range(n): a permutation where no element
-    appears in its original position. Uses random seed for reproducibility.
-    """
     rng = random.Random(seed)
     indices = list(range(n))
     for attempt in range(1000):
@@ -124,16 +109,10 @@ def _make_derangement(n: int, seed: int = 42) -> list:
         rng.shuffle(perm)
         if all(perm[i] != i for i in range(n)):
             return perm
-    # Fallback: rotate by 1 (guaranteed derangement for n > 1)
     return indices[1:] + [indices[0]]
 
 
 def prepare_scrambled_dataset(csv_path: str, tokenizer, seed: int = 42):
-    """
-    FIX 3: Adapter A' — loads Golden corpus, permutes TNM label triples
-    across records (derangement under seed=42), verifies entropy is preserved,
-    then tokenizes. The note free_text is unchanged; only the labels are shuffled.
-    """
     if not os.path.exists(csv_path):
         print(f"Skipping scrambled dataset: {csv_path} not found.")
         return None
@@ -142,16 +121,13 @@ def prepare_scrambled_dataset(csv_path: str, tokenizer, seed: int = 42):
     n  = len(df)
     print(f"\n[Adapter A'] Scrambling labels for {n} records (seed={seed})...")
 
-    # Build derangement of row indices
     perm = _make_derangement(n, seed=seed)
 
-    # Permute only the label columns; free_text stays in place
     df_scrambled = df.copy()
     df_scrambled["T_target"] = df["T_target"].iloc[perm].values
     df_scrambled["N_target"] = df["N_target"].iloc[perm].values
     df_scrambled["M_target"] = df["M_target"].iloc[perm].values
 
-    # Verify no record retained its own label triple
     retained = sum(
         df_scrambled["T_target"].iloc[i] == df["T_target"].iloc[i] and
         df_scrambled["N_target"].iloc[i] == df["N_target"].iloc[i] and
@@ -161,7 +137,6 @@ def prepare_scrambled_dataset(csv_path: str, tokenizer, seed: int = 42):
     print(f"  Records retaining original label triple: {retained} "
           f"({'✓ true derangement' if retained == 0 else '⚠️  not a derangement'})")
 
-    # Verify entropy is preserved vs original
     print("\n  Entropy comparison (original vs scrambled):")
     for col, pfx, key in [("T_target", "T", "T"), ("N_target", "N", "N"), ("M_target", "M", "M")]:
         orig_ent = shannon_entropy(df[col].value_counts())
@@ -169,7 +144,6 @@ def prepare_scrambled_dataset(csv_path: str, tokenizer, seed: int = 42):
         print(f"    [{col}] original={orig_ent:.4f}  scrambled={scr_ent:.4f}  "
               f"{'✓ identical' if abs(orig_ent - scr_ent) < 1e-10 else '⚠️  differs'}")
 
-    # Tokenize
     formatted_texts = []
     for _, row in df_scrambled.iterrows():
         text = row["free_text"]
@@ -201,14 +175,12 @@ def prepare_scrambled_dataset(csv_path: str, tokenizer, seed: int = 42):
 
 
 def prepare_dataset(csv_path: str, tokenizer):
-    """Loads CSV, formats Prompt-Completion pairs, tokenizes."""
     if not os.path.exists(csv_path):
         print(f"Skipping: {csv_path} not found.")
         return None
 
     df = pd.read_csv(csv_path)
 
-    # FIX 2: Log training set stats
     print(f"\nTraining set: {len(df)} records from {csv_path}")
     check_label_diversity(df, csv_path, abort_on_fail=False)
 
@@ -300,23 +272,21 @@ def main():
     tier1_csv = "data_splits/train_tier1_raw.csv"
     tier3_csv = "data_splits/train_tier3_golden.csv"
 
-    # ── Startup validation ────────────────────────────────────────────────────
     missing = [p for p in (tier1_csv, tier3_csv) if not os.path.exists(p)]
     if missing:
         print(f"[ERROR] Missing input file(s): {missing}")
         print("        Run pipeline/phase3_benchmark.py first to produce data_splits/.")
         return
 
-    os.makedirs("adapters/tier1_raw",     exist_ok=True)
+    os.makedirs("adapters/tier1_raw",       exist_ok=True)
     os.makedirs("adapters/tier3_scrambled", exist_ok=True)
-    os.makedirs("adapters/tier3_golden",  exist_ok=True)
+    os.makedirs("adapters/tier3_golden",    exist_ok=True)
 
     print("Initializing tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # ── Adapter A — Tier 1 Raw (UNKNOWN labels, degenerate control) ───────────
     print("\n" + "="*60)
     print("ADAPTER A — Tier 1 Raw (uninformative labels)")
     print("="*60)
@@ -325,7 +295,6 @@ def main():
         train_qlora_adapter(dataset_tier1, "adapters/tier1_raw",
                             "Adapter A — Tier 1 (Raw)", tokenizer, seed=42)
 
-    # ── Adapter A' — Tier 3 Golden with scrambled labels ─────────────────────
     print("\n" + "="*60)
     print("ADAPTER A' — Tier 3 Golden (label-permuted, entropy preserved)")
     print("="*60)
@@ -336,7 +305,6 @@ def main():
         train_qlora_adapter(dataset_scrambled, "adapters/tier3_scrambled",
                             "Adapter A' — Tier 3 (Scrambled)", tokenizer, seed=42)
 
-    # ── Adapter B — Tier 3 Golden with original labels ────────────────────────
     print("\n" + "="*60)
     print("ADAPTER B — Tier 3 Golden (intact content-label correspondence)")
     print("="*60)
