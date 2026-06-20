@@ -4,27 +4,13 @@ STEP_6b_Phase3_benchmark.py
 ────────────────────────────
 Runs the complete TSTR benchmark:
   • Synthetic held-out (in-distribution evaluation — NOT labelled as TSTR)
-  • MTSamples Lung       (genuine TSTR — T-stage only)
-  • MTSamples All-Cancer (genuine TSTR — T-stage only)
+  • TCGA Lung       (genuine TSTR , TNM stages)
+  • TCGA Cross-tumor (genuine TSTR, TNM stages)
 
 For each dataset, evaluates:
   • Zero-shot Llama-3-8B-Instruct (baseline)
   • Adapter A (Tier 1 Raw — degenerate prior)
   • Adapter B (Tier 3 Golden — corrected corpus)
-
-Usage:
-    # Synthetic held-out only (run first to verify everything works):
-    CUDA_VISIBLE_DEVICES=1 python STEP_6b_Phase3_benchmark.py
-
-    # Add MTSamples Lung:
-    CUDA_VISIBLE_DEVICES=1 python STEP_6b_Phase3_benchmark.py \\
-        --real_data_file mtsamples_lung_gold.csv \\
-        --dataset_label "MTSamples Lung"
-
-    # Add MTSamples All-Cancer:
-    CUDA_VISIBLE_DEVICES=1 python STEP_6b_Phase3_benchmark.py \\
-        --real_data_file mtsamples_all_cancer_gold.csv \\
-        --dataset_label "MTSamples All-Cancer"
 
 Run it three times (once per dataset), or combine into a shell script — see bottom.
 """
