@@ -19,7 +19,7 @@ Four phases. Each one gates the next.
               ↓ G(x) gate: JSON schema + SNOMED CT + AJCC logic
 [Phase 2] Audit             →  Shannon entropy per T / N / M — catches silent label collapse
               ↓ entropy gate: H_T,N ≥ 1.109 · H_M ≥ 0.554
-[Phase 3] Benchmark         →  TSTR on real MTSamples clinical notes
+[Phase 3] Benchmark         →  TSTR on real TCGA pathology reports (extracted TNM stages)
 [Phase 4] Fine-tune         →  QLoRA adapters on 162 certified records
 ```
 
@@ -56,7 +56,7 @@ Three independent studies, each running the full pipeline under controlled condi
 | Gate Decomposition | Which gate component does the most work? | B (schema) vs C (schema+ontology) vs D (full G(x)) |
 | RAG vs No-RAG | Does MedCPT retrieval enrich the corpus meaningfully? | D (no RAG) vs E (RAG) |
 
-Each study runs through Phase 1 (generation), Phase 2 (audit), and Phase 4 (training) independently — then Phase 3 evaluates all adapters together on MTSamples.
+Each study runs through Phase 1 (generation), Phase 2 (audit), and Phase 4 (training) independently — then Phase 3 evaluates all adapters together on TCGA samples.
 
 ---
 
@@ -72,7 +72,7 @@ pipeline/               Original Phase 1–4 (reference implementation)
 ablation_phases/        Ablation-aware Phase 1–4 (condition-parameterized)
   phase1_generate.py    accepts --condition ungated/schema_only/schema_onto/full_norag/full_rag
   phase2_audit.py       cross-condition quality comparison
-  phase3_benchmark.py   all five adapters on MTSamples
+  phase3_benchmark.py   all five adapters on TCGA data
   phase4_finetune.py    trains one adapter per condition
 
 ablations/              Three independent ablation studies
@@ -99,7 +99,7 @@ core/                   Shared utilities
   medcpt.py             MedCPT RAG retrieval over FAISS PubMed index
   logging_utils.py      JSONL logging and checkpointing
 
-preprocessing/          MTSamples extraction and real-world TSTR setup
+preprocessing/          TCGA pathology reports extraction and real-world TSTR setup
 experiments/            Prompt engineering · Model comparison · Longitudinal generation
 utils/                  BioPortal post-processing
 data/                   Ablation design CSVs (128-cell full factorial · 11-point OFAT)
